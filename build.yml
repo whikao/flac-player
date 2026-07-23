@@ -1,0 +1,582 @@
+name: Build FLAC Player APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Create Project Files
+        run: |
+          mkdir -p src/screens src/components src/hooks src/utils assets
+
+          cat > package.json << 'EOF'
+          {
+            "name": "flac-player",
+            "version": "1.0.0",
+            "main": "expo/AppEntry.js",
+            "scripts": {
+              "start": "expo start",
+              "android": "expo run:android"
+            },
+            "dependencies": {
+              "expo": "~50.0.0",
+              "expo-av": "~13.10.0",
+              "expo-document-picker": "~11.10.0",
+              "expo-media-library": "~15.9.0",
+              "expo-status-bar": "~1.11.0",
+              "react": "18.2.0",
+              "react-native": "0.73.0",
+              "@react-native-async-storage/async-storage": "1.21.0",
+              "react-native-track-player": "^4.0.0",
+              "react-native-gesture-handler": "~2.14.0",
+              "react-native-reanimated": "~3.6.0"
+            },
+            "devDependencies": {
+              "@babel/core": "^7.20.0",
+              "eas-cli": "^7.0.0"
+            },
+            "private": true
+          }
+          EOF
+
+          cat > app.json << 'EOF'
+          {
+            "expo": {
+              "name": "FLAC Player",
+              "slug": "flac-player",
+              "version": "1.0.0",
+              "orientation": "portrait",
+              "icon": "./assets/icon.png",
+              "userInterfaceStyle": "dark",
+              "splash": {
+                "image": "./assets/splash.png",
+                "resizeMode": "contain",
+                "backgroundColor": "#0a0a0f"
+              },
+              "assetBundlePatterns": ["**/*"],
+              "ios": {
+                "supportsTablet": true,
+                "bundleIdentifier": "com.yourname.flacplayer"
+              },
+              "android": {
+                "adaptiveIcon": {
+                  "foregroundImage": "./assets/adaptive-icon.png",
+                  "backgroundColor": "#0a0a0f"
+                },
+                "package": "com.yourname.flacplayer",
+                "permissions": [
+                  "READ_EXTERNAL_STORAGE",
+                  "READ_MEDIA_AUDIO",
+                  "FOREGROUND_SERVICE",
+                  "WAKE_LOCK"
+                ]
+              },
+              "plugins": [
+                [
+                  "react-native-track-player",
+                  {
+                    "android": {
+                      "appKilledPlaybackBehavior": "continue_playback"
+                    }
+                  }
+                ]
+              ]
+            }
+          }
+          EOF
+
+          cat > eas.json << 'EOF'
+          {
+            "cli": {
+              "version": ">= 7.0.0"
+            },
+            "build": {
+              "development": {
+                "developmentClient": true,
+                "distribution": "internal"
+              },
+              "preview": {
+                "distribution": "internal",
+                "android": {
+                  "buildType": "apk"
+                }
+              },
+              "production": {
+                "android": {
+                  "buildType": "app-bundle"
+                }
+              }
+            }
+          }
+          EOF
+
+          cat > babel.config.js << 'EOF'
+          module.exports = function(api) {
+            api.cache(true);
+            return {
+              presets: ['babel-preset-expo'],
+              plugins: ['react-native-reanimated/plugin'],
+            };
+          };
+          EOF
+
+          touch assets/icon.png
+          touch assets/splash.png
+          touch assets/adaptive-icon.png
+
+      - name: Create App.js
+        run: |
+          cat > App.js << 'APPEOF'
+          import React, { useState, useCallback, useEffect, useRef } from 'react';
+          import { StatusBar } from 'expo-status-bar';
+          import {
+            View, Text, StyleSheet, TouchableOpacity, ScrollView,
+            Animated, Dimensions, Modal,
+          } from 'react-native';
+          import * as DocumentPicker from 'expo-document-picker';
+          import * as MediaLibrary from 'expo-media-library';
+          import AsyncStorage from '@react-native-async-storage/async-storage';
+          import TrackPlayer, {
+            State, Capability, usePlaybackState, useProgress,
+          } from 'react-native-track-player';
+
+          const { width } = Dimensions.get('window');
+
+          const formatTime = (seconds) => {
+            if (!isFinite(seconds) || seconds < 0) return '0:00';
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return `${m}:${s < 10 ? '0' : ''}${s}`;
+          };
+
+          export default function App() {
+            const [playlist, setPlaylist] = useState([]);
+            const [currentIndex, setCurrentIndex] = useState(-1);
+            const [currentTrack, setCurrentTrack] = useState(null);
+            const [avatarUri, setAvatarUri] = useState(null);
+            const [showPlaylist, setShowPlaylist] = useState(false);
+            const [showSettings, setShowSettings] = useState(false);
+            const [sleepTimeLeft, setSleepTimeLeft] = useState(null);
+            const [shuffleMode, setShuffleMode] = useState(false);
+
+            const playbackState = usePlaybackState();
+            const progress = useProgress();
+            const isPlaying = playbackState.state === State.Playing;
+
+            const sleepTimerRef = useRef(null);
+            const sleepIntervalRef = useRef(null);
+            const scaleAnim = useRef(new Animated.Value(1)).current;
+            const vizBars = useRef(Array(20).fill(0).map(() => new Animated.Value(4))).current;
+
+            useEffect(() => {
+              setupPlayer();
+              loadAvatar();
+              return () => {
+                TrackPlayer.destroy();
+                clearSleepTimer();
+              };
+            }, []);
+
+            useEffect(() => {
+              if (isPlaying) {
+                Animated.loop(
+                  Animated.sequence([
+                    Animated.timing(scaleAnim, { toValue: 1.02, duration: 2000, useNativeDriver: true }),
+                    Animated.timing(scaleAnim, { toValue: 1, duration: 2000, useNativeDriver: true }),
+                  ])
+                ).start();
+              } else {
+                scaleAnim.setValue(1);
+              }
+            }, [isPlaying]);
+
+            useEffect(() => {
+              if (!isPlaying) {
+                vizBars.forEach(bar => bar.setValue(4));
+                return;
+              }
+              const anims = vizBars.map((bar) => {
+                return Animated.loop(
+                  Animated.sequence([
+                    Animated.timing(bar, { toValue: 4 + Math.random() * 36, duration: 200 + Math.random() * 300, useNativeDriver: false }),
+                    Animated.timing(bar, { toValue: 4 + Math.random() * 20, duration: 200 + Math.random() * 300, useNativeDriver: false }),
+                  ])
+                );
+              });
+              anims.forEach(a => a.start());
+              return () => anims.forEach(a => a.stop());
+            }, [isPlaying]);
+
+            const setupPlayer = async () => {
+              try {
+                await TrackPlayer.setupPlayer({ autoHandleInterruptions: true });
+                await TrackPlayer.updateOptions({
+                  capabilities: [Capability.Play, Capability.Pause, Capability.SkipToNext, Capability.SkipToPrevious, Capability.SeekTo],
+                  compactCapabilities: [Capability.Play, Capability.Pause, Capability.SkipToNext],
+                  notificationCapabilities: [Capability.Play, Capability.Pause, Capability.SkipToNext, Capability.SkipToPrevious],
+                });
+              } catch (e) { console.log('Player already setup'); }
+            };
+
+            const loadAvatar = async () => {
+              const saved = await AsyncStorage.getItem('userAvatar');
+              if (saved) setAvatarUri(saved);
+            };
+
+            const pickMusic = async () => {
+              try {
+                const result = await DocumentPicker.getDocumentAsync({
+                  type: 'audio/*', multiple: true, copyToCacheDirectory: true,
+                });
+                if (result.canceled) return;
+
+                const newTracks = result.assets.map((file, idx) => ({
+                  id: `track-${Date.now()}-${idx}`,
+                  url: file.uri,
+                  title: file.name.replace(/\.[^/.]+$/, ''),
+                  artist: '本地文件', duration: 0,
+                }));
+
+                setPlaylist(prev => {
+                  const updated = [...prev, ...newTracks];
+                  if (currentIndex === -1 && updated.length > 0) {
+                    setTimeout(() => loadTrack(0, updated), 100);
+                  }
+                  return updated;
+                });
+              } catch (err) { console.error('Pick error:', err); }
+            };
+
+            const scanMediaLibrary = async () => {
+              const { status } = await MediaLibrary.requestPermissionsAsync();
+              if (status !== 'granted') return;
+              const media = await MediaLibrary.getAssetsAsync({ mediaType: 'audio', first: 100 });
+              const newTracks = media.assets.map((item) => ({
+                id: `media-${item.id}`, url: item.uri,
+                title: item.filename.replace(/\.[^/.]+$/, ''),
+                artist: '本地 FLAC', duration: item.duration,
+              }));
+              setPlaylist(prev => {
+                const updated = [...prev, ...newTracks];
+                if (currentIndex === -1 && updated.length > 0) {
+                  setTimeout(() => loadTrack(0, updated), 100);
+                }
+                return updated;
+              });
+            };
+
+            const loadTrack = async (index, trackList = playlist) => {
+              if (index < 0 || index >= trackList.length) return;
+              setCurrentIndex(index);
+              const track = trackList[index];
+              setCurrentTrack(track);
+              await TrackPlayer.reset();
+              await TrackPlayer.add({
+                id: track.id, url: track.url,
+                title: track.title, artist: track.artist, duration: track.duration,
+              });
+            };
+
+            const play = async () => { await TrackPlayer.play(); };
+            const pause = async () => { await TrackPlayer.pause(); };
+
+            const next = async () => {
+              if (playlist.length === 0) return;
+              let nextIdx = shuffleMode ? Math.floor(Math.random() * playlist.length)
+                : (currentIndex < playlist.length - 1 ? currentIndex + 1 : 0);
+              await loadTrack(nextIdx);
+              await play();
+            };
+
+            const previous = async () => {
+              if (playlist.length === 0) return;
+              const prevIdx = currentIndex > 0 ? currentIndex - 1 : playlist.length - 1;
+              await loadTrack(prevIdx);
+              await play();
+            };
+
+            const seekTo = async (position) => { await TrackPlayer.seekTo(position); };
+
+            const playTrackAtIndex = async (index) => {
+              await loadTrack(index);
+              await play();
+            };
+
+            const setSleepTimer = (minutes, seconds) => {
+              const totalMs = (minutes * 60 + seconds) * 1000;
+              if (totalMs <= 0) { clearSleepTimer(); return; }
+              clearSleepTimer();
+              const endTime = Date.now() + totalMs;
+              sleepTimerRef.current = setTimeout(() => { pause(); clearSleepTimer(); }, totalMs);
+              sleepIntervalRef.current = setInterval(() => {
+                const remaining = Math.max(0, endTime - Date.now());
+                if (remaining <= 0) { setSleepTimeLeft(null); return; }
+                const m = Math.floor(remaining / 60000);
+                const s = Math.floor((remaining % 60000) / 1000);
+                setSleepTimeLeft(`${m}:${s < 10 ? '0' : ''}${s}`);
+              }, 1000);
+            };
+
+            const clearSleepTimer = () => {
+              if (sleepTimerRef.current) { clearTimeout(sleepTimerRef.current); sleepTimerRef.current = null; }
+              if (sleepIntervalRef.current) { clearInterval(sleepIntervalRef.current); sleepIntervalRef.current = null; }
+              setSleepTimeLeft(null);
+            };
+
+            const pickAvatar = async () => {
+              const result = await DocumentPicker.getDocumentAsync({ type: 'image/*', copyToCacheDirectory: true });
+              if (!result.canceled && result.assets[0]) {
+                setAvatarUri(result.assets[0].uri);
+                await AsyncStorage.setItem('userAvatar', result.assets[0].uri);
+              }
+            };
+
+            const lyrics = [
+              { time: 0, text: '♪ 音乐开始 ♪' }, { time: 5, text: '高解析度 FLAC 音乐' },
+              { time: 10, text: '无损音质完美还原' }, { time: 15, text: '歌词同步滚动显示' },
+              { time: 20, text: '支持睡眠定时器' }, { time: 25, text: '点击头像可更换' },
+              { time: 30, text: '♪ 享受音乐 ♪' }, { time: 35, text: '每一个音符都清晰可辨' },
+              { time: 40, text: 'FLAC 格式原生支持' }, { time: 45, text: '高品质音乐体验' },
+              { time: 50, text: '♪ 音乐继续 ♪' }, { time: 60, text: '感谢使用 FLAC Player' },
+            ];
+
+            const currentLyricIndex = lyrics.reduce((idx, line, i) => 
+              progress.position >= line.time ? i : idx, -1);
+
+            return (
+              <View style={styles.container}>
+                <StatusBar style="light" />
+                <View style={styles.header}>
+                  <View style={styles.formatBadge}><Text style={styles.formatText}>FLAC</Text></View>
+                  <Text style={styles.sampleRate}>{currentTrack ? '48.0 kHz / 24 bit' : '-- kHz / -- bit'}</Text>
+                  {sleepTimeLeft && <View style={styles.sleepIndicator}><Text style={styles.sleepText}>⏱ {sleepTimeLeft}</Text></View>}
+                </View>
+
+                <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+                  <View style={styles.albumSection}>
+                    <TouchableOpacity onPress={pickMusic} activeOpacity={0.9}>
+                      <Animated.View style={[styles.albumArtWrapper, { transform: [{ scale: scaleAnim }] }]}>
+                        <View style={styles.albumPlaceholder}>
+                          <Text style={styles.albumIcon}>🎵</Text>
+                          <Text style={styles.albumHint}>点击选择 FLAC 文件</Text>
+                        </View>
+                      </Animated.View>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.avatarOverlay} onPress={pickAvatar}>
+                      {avatarUri ? <Animated.Image source={{ uri: avatarUri }} style={styles.avatarImage} /> 
+                        : <View style={styles.avatarPlaceholder}><Text style={styles.avatarText}>U</Text></View>}
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.trackInfo}>
+                    <Text style={styles.trackTitle} numberOfLines={1}>{currentTrack?.title || '未选择歌曲'}</Text>
+                    <Text style={styles.trackArtist} numberOfLines={1}>{currentTrack?.artist || '点击上方选择 FLAC 文件'}</Text>
+                  </View>
+
+                  <View style={styles.visualizer}>
+                    {vizBars.map((bar, i) => (
+                      <Animated.View key={i} style={[styles.vizBar, { height: bar }]} />
+                    ))}
+                  </View>
+
+                  <View style={styles.lyricsSection}>
+                    <ScrollView ref={ref => ref && currentLyricIndex >= 0 && setTimeout(() => ref.scrollTo({ y: currentLyricIndex * 40 - 40, animated: true }), 100)} showsVerticalScrollIndicator={false}>
+                      {lyrics.map((line, i) => (
+                        <Text key={i} style={[styles.lyricLine, i === currentLyricIndex && styles.lyricActive, i < currentLyricIndex && styles.lyricPast]}>
+                          {line.text}
+                        </Text>
+                      ))}
+                    </ScrollView>
+                  </View>
+
+                  <View style={styles.progressSection}>
+                    <TouchableOpacity style={styles.progressBarWrapper} onPress={(e) => {
+                      const { locationX } = e.nativeEvent;
+                      seekTo((locationX / (width - 56)) * progress.duration);
+                    }}>
+                      <View style={styles.progressBarBg}>
+                        <View style={[styles.progressBarFill, { width: `${progress.duration > 0 ? (progress.position / progress.duration) * 100 : 0}%` }]} />
+                      </View>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.timeDisplay}>
+                    <Text style={styles.timeText}>{formatTime(progress.position)}</Text>
+                    <Text style={styles.timeText}>{formatTime(progress.duration)}</Text>
+                  </View>
+
+                  <View style={styles.controls}>
+                    <TouchableOpacity style={styles.controlBtn} onPress={() => setShuffleMode(!shuffleMode)}>
+                      <Text style={[styles.controlIcon, shuffleMode && { color: '#7c3aed' }]}>🔀</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.controlBtn} onPress={previous}><Text style={styles.controlIcon}>⏮</Text></TouchableOpacity>
+                    <TouchableOpacity style={styles.playBtn} onPress={isPlaying ? pause : play}>
+                      <Text style={styles.playIcon}>{isPlaying ? '⏸' : '▶'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.controlBtn} onPress={next}><Text style={styles.controlIcon}>⏭</Text></TouchableOpacity>
+                    <TouchableOpacity style={styles.controlBtn} onPress={() => setShowPlaylist(true)}><Text style={styles.controlIcon}>☰</Text></TouchableOpacity>
+                  </View>
+                </ScrollView>
+
+                <TouchableOpacity style={styles.settingsToggle} onPress={() => setShowSettings(true)}>
+                  <Text style={styles.settingsToggleText}>⚙</Text>
+                </TouchableOpacity>
+
+                <Modal visible={showPlaylist} transparent animationType="slide" onRequestClose={() => setShowPlaylist(false)}>
+                  <View style={styles.modalOverlay}>
+                    <View style={styles.playlistModal}>
+                      <View style={styles.playlistHeader}>
+                        <Text style={styles.playlistTitle}>播放列表</Text>
+                        <TouchableOpacity onPress={() => setShowPlaylist(false)}><Text style={styles.closeBtn}>✕</Text></TouchableOpacity>
+                      </View>
+                      <ScrollView>
+                        {playlist.map((track, i) => (
+                          <TouchableOpacity key={track.id} style={[styles.playlistItem, i === currentIndex && styles.playlistItemActive]} onPress={() => { playTrackAtIndex(i); setShowPlaylist(false); }}>
+                            <Text style={[styles.playlistNum, i === currentIndex && { color: '#7c3aed' }]}>{i === currentIndex && isPlaying ? '▶' : i + 1}</Text>
+                            <View style={styles.playlistInfo}>
+                              <Text style={styles.playlistTitleText} numberOfLines={1}>{track.title}</Text>
+                              <Text style={styles.playlistArtist}>本地 FLAC</Text>
+                            </View>
+                            <Text style={styles.playlistDuration}>{formatTime(track.duration)}</Text>
+                          </TouchableOpacity>
+                        ))}
+                        {playlist.length === 0 && <Text style={styles.emptyPlaylist}>暂无歌曲，点击添加</Text>}
+                      </ScrollView>
+                      <TouchableOpacity style={styles.addBtn} onPress={pickMusic}><Text style={styles.addBtnText}>+ 添加音乐</Text></TouchableOpacity>
+                    </View>
+                  </View>
+                </Modal>
+
+                <Modal visible={showSettings} transparent animationType="slide" onRequestClose={() => setShowSettings(false)}>
+                  <View style={styles.modalOverlay}>
+                    <View style={styles.settingsModal}>
+                      <View style={styles.settingsHeader}>
+                        <Text style={styles.settingsTitle}>播放设置</Text>
+                        <TouchableOpacity onPress={() => setShowSettings(false)}><Text style={styles.closeBtn}>✕</Text></TouchableOpacity>
+                      </View>
+                      <ScrollView>
+                        <View style={styles.settingRow}>
+                          <Text style={styles.settingLabel}>⏱ 睡眠定时器</Text>
+                          <TouchableOpacity style={styles.timeBtn} onPress={() => { setSleepTimer(5, 0); setShowSettings(false); }}>
+                            <Text style={styles.timeBtnText}>设置5分钟</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <TouchableOpacity style={styles.settingRow} onPress={scanMediaLibrary}>
+                          <Text style={styles.settingLabel}>📁 扫描媒体库</Text>
+                          <Text style={styles.settingArrow}>›</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.settingRow} onPress={pickAvatar}>
+                          <Text style={styles.settingLabel}>👤 更换头像</Text>
+                          <Text style={styles.settingArrow}>›</Text>
+                        </TouchableOpacity>
+                        {sleepTimeLeft && (
+                          <TouchableOpacity style={[styles.settingRow, { backgroundColor: 'rgba(239,68,68,0.1)' }]} onPress={() => { clearSleepTimer(); setShowSettings(false); }}>
+                            <Text style={[styles.settingLabel, { color: '#ef4444' }]}>✕ 取消睡眠定时器</Text>
+                          </TouchableOpacity>
+                        )}
+                      </ScrollView>
+                    </View>
+                  </View>
+                </Modal>
+              </View>
+            );
+          }
+
+          const styles = StyleSheet.create({
+            container: { flex: 1, backgroundColor: '#0a0a0f' },
+            header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 50, paddingBottom: 12 },
+            formatBadge: { backgroundColor: '#7c3aed', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
+            formatText: { color: '#fff', fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+            sampleRate: { color: '#5a5a6a', fontSize: 12 },
+            sleepIndicator: { position: 'absolute', right: 20, top: 50 },
+            sleepText: { color: '#f59e0b', fontSize: 11 },
+            scrollView: { flex: 1 },
+            albumSection: { alignItems: 'center', paddingVertical: 20, position: 'relative' },
+            albumArtWrapper: { width: 280, height: 280, borderRadius: 20, overflow: 'hidden', shadowColor: '#7c3aed', shadowOffset: { width: 0, height: 20 }, shadowOpacity: 0.3, shadowRadius: 40, elevation: 20 },
+            albumPlaceholder: { width: '100%', height: '100%', backgroundColor: '#12121a', justifyContent: 'center', alignItems: 'center' },
+            albumIcon: { fontSize: 60, opacity: 0.3 },
+            albumHint: { color: '#5a5a6a', fontSize: 13, marginTop: 8 },
+            avatarOverlay: { position: 'absolute', bottom: 5, right: width / 2 - 140 + 250, width: 56, height: 56, borderRadius: 28, borderWidth: 3, borderColor: '#0a0a0f', overflow: 'hidden', backgroundColor: '#1a1a24' },
+            avatarImage: { width: '100%', height: '100%' },
+            avatarPlaceholder: { width: '100%', height: '100%', backgroundColor: '#7c3aed', justifyContent: 'center', alignItems: 'center' },
+            avatarText: { color: '#fff', fontSize: 20, fontWeight: '700' },
+            trackInfo: { alignItems: 'center', paddingVertical: 16, paddingHorizontal: 24 },
+            trackTitle: { color: '#f0f0f5', fontSize: 22, fontWeight: '700', marginBottom: 6, letterSpacing: -0.3 },
+            trackArtist: { color: '#8b8b9a', fontSize: 15, fontWeight: '500' },
+            visualizer: { flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-end', height: 40, paddingHorizontal: 24, marginBottom: 8, gap: 3 },
+            vizBar: { width: 4, backgroundColor: '#7c3aed', borderRadius: 2, opacity: 0.7 },
+            lyricsSection: { height: 120, marginHorizontal: 24, marginBottom: 16, overflow: 'hidden' },
+            lyricLine: { color: '#5a5a6a', fontSize: 15, textAlign: 'center', paddingVertical: 8, lineHeight: 24 },
+            lyricActive: { color: '#f0f0f5', fontSize: 17, fontWeight: '600' },
+            lyricPast: { color: '#8b8b9a', opacity: 0.6 },
+            progressSection: { paddingHorizontal: 28, paddingBottom: 8 },
+            progressBarWrapper: { height: 32, justifyContent: 'center' },
+            progressBarBg: { height: 4, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' },
+            progressBarFill: { height: '100%', backgroundColor: '#7c3aed', borderRadius: 2 },
+            timeDisplay: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 28, paddingBottom: 20 },
+            timeText: { color: '#5a5a6a', fontSize: 12 },
+            controls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24, paddingBottom: 24 },
+            controlBtn: { padding: 8 },
+            controlIcon: { fontSize: 24, color: '#8b8b9a' },
+            playBtn: { width: 64, height: 64, backgroundColor: '#7c3aed', borderRadius: 32, justifyContent: 'center', alignItems: 'center', shadowColor: '#7c3aed', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.4, shadowRadius: 16, elevation: 10 },
+            playIcon: { fontSize: 28, color: '#fff' },
+            settingsToggle: { position: 'absolute', bottom: 20, right: 20, width: 44, height: 44, backgroundColor: '#1a1a24', borderRadius: 22, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+            settingsToggleText: { fontSize: 20, color: '#8b8b9a' },
+            modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+            playlistModal: { backgroundColor: '#12121a', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '70%', paddingBottom: 20 },
+            playlistHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+            playlistTitle: { color: '#f0f0f5', fontSize: 18, fontWeight: '700' },
+            closeBtn: { color: '#8b8b9a', fontSize: 20 },
+            playlistItem: { flexDirection: 'row', alignItems: 'center', padding: 14, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.03)' },
+            playlistItemActive: { backgroundColor: 'rgba(124,58,237,0.15)', borderLeftWidth: 3, borderLeftColor: '#7c3aed' },
+            playlistNum: { width: 30, color: '#5a5a6a', fontSize: 12 },
+            playlistInfo: { flex: 1, marginLeft: 8 },
+            playlistTitleText: { color: '#f0f0f5', fontSize: 14 },
+            playlistArtist: { color: '#5a5a6a', fontSize: 12, marginTop: 2 },
+            playlistDuration: { color: '#5a5a6a', fontSize: 12 },
+            emptyPlaylist: { color: '#5a5a6a', textAlign: 'center', padding: 40 },
+            addBtn: { margin: 20, backgroundColor: '#7c3aed', padding: 14, borderRadius: 12, alignItems: 'center' },
+            addBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+            settingsModal: { backgroundColor: '#12121a', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '60%', paddingBottom: 20 },
+            settingsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+            settingsTitle: { color: '#8b8b9a', fontSize: 14, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
+            settingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)' },
+            settingLabel: { color: '#f0f0f5', fontSize: 14 },
+            timeBtn: { backgroundColor: '#1a1a24', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', borderRadius: 8, padding: 8 },
+            timeBtnText: { color: '#8b8b9a', fontSize: 12 },
+            settingArrow: { color: '#5a5a6a', fontSize: 18 },
+          });
+          APPEOF
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Android APK with EAS
+        run: |
+          eas build --platform android --profile preview --non-interactive
+
+      - name: Upload build info
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-info
+          path: |
+            ./
+            !node_modules
