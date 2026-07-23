@@ -1,4 +1,4 @@
-name: Build FLAC Player APK
+name: Build FLAC Player APK (Local)
 
 on:
   push:
@@ -17,138 +17,297 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Setup Expo
-        uses: expo/expo-github-action@v8
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
-          eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Create Project Files
         run: |
-          mkdir -p src/screens src/components src/hooks src/utils assets
+          mkdir -p src/screens src/components src/hooks src/utils assets android/app/src/main/res/values
 
           cat > package.json << 'EOF'
           {
             "name": "flac-player",
             "version": "1.0.0",
-            "main": "expo/AppEntry.js",
+            "main": "index.js",
             "scripts": {
-              "start": "expo start",
-              "android": "expo run:android"
+              "android": "react-native run-android",
+              "start": "react-native start"
             },
             "dependencies": {
-              "expo": "~50.0.0",
-              "expo-av": "~13.10.0",
-              "expo-document-picker": "~11.10.0",
-              "expo-media-library": "~15.9.0",
-              "expo-status-bar": "~1.11.0",
               "react": "18.2.0",
               "react-native": "0.73.0",
+              "react-native-track-player": "^4.0.0",
               "@react-native-async-storage/async-storage": "1.21.0",
-              "react-native-gesture-handler": "~2.14.0",
-              "react-native-reanimated": "~3.6.0"
+              "react-native-document-picker": "^9.1.0",
+              "react-native-permissions": "^4.0.0"
             },
             "devDependencies": {
               "@babel/core": "^7.20.0",
-              "eas-cli": "^7.0.0"
+              "@babel/runtime": "^7.20.0",
+              "metro-react-native-babel-preset": "^0.77.0"
             },
             "private": true
           }
           EOF
 
-          cat > app.json << 'EOF'
-          {
-            "expo": {
-              "name": "FLAC Player",
-              "slug": "flac-player",
-              "version": "1.0.0",
-              "orientation": "portrait",
-              "icon": "./assets/icon.png",
-              "userInterfaceStyle": "dark",
-              "splash": {
-                "image": "./assets/splash.png",
-                "resizeMode": "contain",
-                "backgroundColor": "#0a0a0f"
-              },
-              "assetBundlePatterns": ["**/*"],
-              "ios": {
-                "supportsTablet": true,
-                "bundleIdentifier": "com.yourname.flacplayer"
-              },
-              "android": {
-                "adaptiveIcon": {
-                  "foregroundImage": "./assets/adaptive-icon.png",
-                  "backgroundColor": "#0a0a0f"
-                },
-                "package": "com.yourname.flacplayer",
-                "permissions": [
-                  "READ_EXTERNAL_STORAGE",
-                  "READ_MEDIA_AUDIO",
-                  "FOREGROUND_SERVICE",
-                  "WAKE_LOCK"
-                ]
-              },
-              "extra": {
-                "eas": {
-                  "projectId": "b2bdad17-cb14-4111-afa6-3ef1fdf83b9c"
-                }
+          cat > android/build.gradle << 'EOF'
+          buildscript {
+              ext {
+                  buildToolsVersion = "34.0.0"
+                  minSdkVersion = 21
+                  compileSdkVersion = 34
+                  targetSdkVersion = 34
+                  ndkVersion = "25.1.8937393"
+                  kotlinVersion = "1.8.0"
               }
-            }
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath("com.android.tools.build:gradle:8.1.1")
+                  classpath("com.facebook.react:react-native-gradle-plugin")
+                  classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${kotlinVersion}")
+              }
+          }
+
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url 'https://www.jitpack.io' }
+              }
           }
           EOF
 
-          cat > eas.json << 'EOF'
-          {
-            "cli": {
-              "version": ">= 7.0.0",
-              "appVersionSource": "remote"
-            },
-            "build": {
-              "development": {
-                "developmentClient": true,
-                "distribution": "internal"
-              },
-              "preview": {
-                "distribution": "internal",
-                "android": {
-                  "buildType": "apk"
-                }
-              },
-              "production": {
-                "android": {
-                  "buildType": "app-bundle"
-                }
+          cat > android/settings.gradle << 'EOF'
+          rootProject.name = 'flacplayer'
+          apply from: file("../node_modules/@react-native-community/cli-platform-android/native_modules.gradle"); applyNativeModulesSettingsGradle(settings)
+          include ':app'
+          EOF
+
+          cat > android/gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m
+          android.useAndroidX=true
+          android.enableJetifier=true
+          FLIPPER_VERSION=0.182.0
+          reactNativeArchitectures=arm64-v8a,armeabi-v7a,x86,x86_64
+          newArchEnabled=false
+          hermesEnabled=true
+          EOF
+
+          cat > android/app/build.gradle << 'EOF'
+          apply plugin: "com.android.application"
+          apply plugin: "com.facebook.react"
+
+          def enableProguardInReleaseBuilds = false
+          def jscFlavor = 'org.webkit:android-jsc:+'
+
+          android {
+              ndkVersion rootProject.ext.ndkVersion
+              buildToolsVersion rootProject.ext.buildToolsVersion
+              compileSdkVersion rootProject.ext.compileSdkVersion
+              namespace "com.whikao.flacplayer"
+              defaultConfig {
+                  applicationId "com.whikao.flacplayer"
+                  minSdkVersion rootProject.ext.minSdkVersion
+                  targetSdkVersion rootProject.ext.targetSdkVersion
+                  versionCode 1
+                  versionName "1.0"
               }
-            }
+              signingConfigs {
+                  debug {
+                      storeFile file('debug.keystore')
+                      storePassword 'android'
+                      keyAlias 'androiddebugkey'
+                      keyPassword 'android'
+                  }
+                  release {
+                      storeFile file('debug.keystore')
+                      storePassword 'android'
+                      keyAlias 'androiddebugkey'
+                      keyPassword 'android'
+                  }
+              }
+              buildTypes {
+                  debug {
+                      signingConfig signingConfigs.debug
+                  }
+                  release {
+                      signingConfig signingConfigs.release
+                      minifyEnabled enableProguardInReleaseBuilds
+                      proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+                  }
+              }
           }
+
+          dependencies {
+              implementation("com.facebook.react:react-android")
+              implementation("com.facebook.react:hermes-android")
+          }
+          EOF
+
+          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <application
+                  android:name=".MainApplication"
+                  android:label="FLAC Player"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:allowBackup="false"
+                  android:theme="@style/AppTheme"
+                  android:supportsRtl="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:label="FLAC Player"
+                      android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+                      android:launchMode="singleTask"
+                      android:windowSoftInputMode="adjustResize"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > android/app/src/main/res/values/styles.xml << 'EOF'
+          <resources>
+              <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+                  <item name="android:editTextBackground">@android:color/transparent</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > android/app/src/main/java/com/whikao/flacplayer/MainActivity.java << 'EOF'
+          package com.whikao.flacplayer;
+          import com.facebook.react.ReactActivity;
+          import com.facebook.react.ReactActivityDelegate;
+          import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint;
+          import com.facebook.react.defaults.DefaultReactActivityDelegate;
+          import android.os.Bundle;
+
+          public class MainActivity extends ReactActivity {
+              @Override
+              protected String getMainComponentName() {
+                  return "flacplayer";
+              }
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(null);
+              }
+
+              @Override
+              protected ReactActivityDelegate createReactActivityDelegate() {
+                  return new DefaultReactActivityDelegate(
+                      this,
+                      getMainComponentName(),
+                      DefaultNewArchitectureEntryPoint.getFabricEnabled());
+              }
+          }
+          EOF
+
+          cat > android/app/src/main/java/com/whikao/flacplayer/MainApplication.java << 'EOF'
+          package com.whikao.flacplayer;
+          import android.app.Application;
+          import com.facebook.react.PackageList;
+          import com.facebook.react.ReactApplication;
+          import com.facebook.react.ReactNativeHost;
+          import com.facebook.react.ReactPackage;
+          import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint;
+          import com.facebook.react.defaults.DefaultReactNativeHost;
+          import com.facebook.soloader.SoLoader;
+          import java.util.List;
+
+          public class MainApplication extends Application implements ReactApplication {
+              private final ReactNativeHost mReactNativeHost = new DefaultReactNativeHost(this) {
+                  @Override
+                  public boolean getUseDeveloperSupport() {
+                      return BuildConfig.DEBUG;
+                  }
+
+                  @Override
+                  protected List<ReactPackage> getPackages() {
+                      return new PackageList(this).getPackages();
+                  }
+
+                  @Override
+                  protected String getJSMainModuleName() {
+                      return "index";
+                  }
+
+                  @Override
+                  protected boolean isNewArchEnabled() {
+                      return BuildConfig.IS_NEW_ARCHITECTURE_ENABLED;
+                  }
+
+                  @Override
+                  protected Boolean isHermesEnabled() {
+                      return BuildConfig.IS_HERMES_ENABLED;
+                  }
+              };
+
+              @Override
+              public ReactNativeHost getReactNativeHost() {
+                  return mReactNativeHost;
+              }
+
+              @Override
+              public void onCreate() {
+                  super.onCreate();
+                  SoLoader.init(this, false);
+                  if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
+                      DefaultNewArchitectureEntryPoint.load();
+                  }
+              }
+          }
+          EOF
+
+          cat > index.js << 'EOF'
+          import { AppRegistry } from 'react-native';
+          import App from './App';
+          AppRegistry.registerComponent('flacplayer', () => App);
+          EOF
+
+          cat > metro.config.js << 'EOF'
+          const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
+          const config = {};
+          module.exports = mergeConfig(getDefaultConfig(__dirname), config);
           EOF
 
           cat > babel.config.js << 'EOF'
-          module.exports = function(api) {
-            api.cache(true);
-            return {
-              presets: ['babel-preset-expo'],
-              plugins: ['react-native-reanimated/plugin'],
-            };
+          module.exports = {
+            presets: ['module:metro-react-native-babel-preset'],
           };
           EOF
-
-          touch assets/icon.png
-          touch assets/splash.png
-          touch assets/adaptive-icon.png
 
       - name: Create App.js
         run: |
           cat > App.js << 'APPEOF'
           import React, { useState, useEffect, useRef } from 'react';
-          import { StatusBar } from 'expo-status-bar';
           import {
             View, Text, StyleSheet, TouchableOpacity, ScrollView,
-            Animated, Dimensions, Modal,
+            Animated, Dimensions, Modal, StatusBar,
           } from 'react-native';
-          import { Audio } from 'expo-av';
-          import * as DocumentPicker from 'expo-document-picker';
-          import * as MediaLibrary from 'expo-media-library';
+          import TrackPlayer, {
+            Event, State, Capability, usePlaybackState, useProgress,
+            useTrackPlayerEvents,
+          } from 'react-native-track-player';
+          import DocumentPicker from 'react-native-document-picker';
           import AsyncStorage from '@react-native-async-storage/async-storage';
 
           const { width } = Dimensions.get('window');
@@ -169,27 +328,21 @@ jobs:
             const [showSettings, setShowSettings] = useState(false);
             const [sleepTimeLeft, setSleepTimeLeft] = useState(null);
             const [shuffleMode, setShuffleMode] = useState(false);
-            const [isPlaying, setIsPlaying] = useState(false);
-            const [position, setPosition] = useState(0);
-            const [duration, setDuration] = useState(0);
 
-            const soundRef = useRef(null);
+            const playbackState = usePlaybackState();
+            const progress = useProgress();
+            const isPlaying = playbackState.state === State.Playing;
+
             const sleepTimerRef = useRef(null);
             const sleepIntervalRef = useRef(null);
             const scaleAnim = useRef(new Animated.Value(1)).current;
             const vizBars = useRef(Array(20).fill(0).map(() => new Animated.Value(4))).current;
 
             useEffect(() => {
+              setupPlayer();
               loadAvatar();
-              Audio.setAudioModeAsync({
-                staysActiveInBackground: true,
-                shouldDuckAndroid: true,
-                playThroughEarpieceAndroid: false,
-              });
               return () => {
-                if (soundRef.current) {
-                  soundRef.current.unloadAsync();
-                }
+                TrackPlayer.destroy();
                 clearSleepTimer();
               };
             }, []);
@@ -224,6 +377,16 @@ jobs:
               return () => anims.forEach(a => a.stop());
             }, [isPlaying]);
 
+            const setupPlayer = async () => {
+              try {
+                await TrackPlayer.setupPlayer({ autoHandleInterruptions: true });
+                await TrackPlayer.updateOptions({
+                  capabilities: [Capability.Play, Capability.Pause, Capability.SkipToNext, Capability.SkipToPrevious, Capability.SeekTo],
+                  compactCapabilities: [Capability.Play, Capability.Pause, Capability.SkipToNext],
+                });
+              } catch (e) { console.log('Player already setup'); }
+            };
+
             const loadAvatar = async () => {
               const saved = await AsyncStorage.getItem('userAvatar');
               if (saved) setAvatarUri(saved);
@@ -231,15 +394,15 @@ jobs:
 
             const pickMusic = async () => {
               try {
-                const result = await DocumentPicker.getDocumentAsync({
-                  type: 'audio/*', multiple: true, copyToCacheDirectory: true,
+                const result = await DocumentPicker.pickMultiple({
+                  type: [DocumentPicker.types.audio],
+                  copyTo: 'cachesDirectory',
                 });
-                if (result.canceled) return;
 
-                const newTracks = result.assets.map((file, idx) => ({
+                const newTracks = result.map((file, idx) => ({
                   id: `track-${Date.now()}-${idx}`,
-                  url: file.uri,
-                  title: file.name.replace(/\.[^/.]+$/, ''),
+                  url: file.fileCopyUri || file.uri,
+                  title: file.name?.replace(/\.[^/.]+$/, '') || '未知歌曲',
                   artist: '本地文件', duration: 0,
                 }));
 
@@ -250,83 +413,27 @@ jobs:
                   }
                   return updated;
                 });
-              } catch (err) { console.error('Pick error:', err); }
-            };
-
-            const scanMediaLibrary = async () => {
-              const { status } = await MediaLibrary.requestPermissionsAsync();
-              if (status !== 'granted') return;
-              const media = await MediaLibrary.getAssetsAsync({ mediaType: 'audio', first: 100 });
-              const newTracks = media.assets.map((item) => ({
-                id: `media-${item.id}`, url: item.uri,
-                title: item.filename.replace(/\.[^/.]+$/, ''),
-                artist: '本地 FLAC', duration: item.duration,
-              }));
-              setPlaylist(prev => {
-                const updated = [...prev, ...newTracks];
-                if (currentIndex === -1 && updated.length > 0) {
-                  setTimeout(() => loadTrack(0, updated), 100);
-                }
-                return updated;
-              });
+              } catch (err) { 
+                if (!DocumentPicker.isCancel(err)) console.error('Pick error:', err); 
+              }
             };
 
             const loadTrack = async (index, trackList = playlist) => {
               if (index < 0 || index >= trackList.length) return;
 
-              if (soundRef.current) {
-                await soundRef.current.unloadAsync();
-              }
-
               setCurrentIndex(index);
               const track = trackList[index];
               setCurrentTrack(track);
-              setPosition(0);
-              setDuration(0);
-              setIsPlaying(false);
 
-              try {
-                const { sound } = await Audio.Sound.createAsync(
-                  { uri: track.url },
-                  { shouldPlay: false },
-                  onPlaybackStatusUpdate
-                );
-                soundRef.current = sound;
-
-                const status = await sound.getStatusAsync();
-                if (status.isLoaded) {
-                  setDuration(status.durationMillis / 1000);
-                }
-              } catch (e) {
-                console.error('Load error:', e);
-              }
+              await TrackPlayer.reset();
+              await TrackPlayer.add({
+                id: track.id, url: track.url,
+                title: track.title, artist: track.artist,
+              });
             };
 
-            const onPlaybackStatusUpdate = (status) => {
-              if (status.isLoaded) {
-                setPosition(status.positionMillis / 1000);
-                setDuration(status.durationMillis / 1000);
-                setIsPlaying(status.isPlaying);
-                if (status.didJustFinish) {
-                  setIsPlaying(false);
-                  next();
-                }
-              }
-            };
-
-            const play = async () => {
-              if (soundRef.current) {
-                await soundRef.current.playAsync();
-                setIsPlaying(true);
-              }
-            };
-
-            const pause = async () => {
-              if (soundRef.current) {
-                await soundRef.current.pauseAsync();
-                setIsPlaying(false);
-              }
-            };
+            const play = async () => { await TrackPlayer.play(); };
+            const pause = async () => { await TrackPlayer.pause(); };
 
             const next = async () => {
               if (playlist.length === 0) return;
@@ -344,9 +451,7 @@ jobs:
             };
 
             const seekTo = async (positionSec) => {
-              if (soundRef.current) {
-                await soundRef.current.setPositionAsync(positionSec * 1000);
-              }
+              await TrackPlayer.seekTo(positionSec);
             };
 
             const playTrackAtIndex = async (index) => {
@@ -376,10 +481,12 @@ jobs:
             };
 
             const pickAvatar = async () => {
-              const result = await DocumentPicker.getDocumentAsync({ type: 'image/*', copyToCacheDirectory: true });
-              if (!result.canceled && result.assets[0]) {
-                setAvatarUri(result.assets[0].uri);
-                await AsyncStorage.setItem('userAvatar', result.assets[0].uri);
+              try {
+                const result = await DocumentPicker.pickSingle({ type: [DocumentPicker.types.images], copyTo: 'cachesDirectory' });
+                setAvatarUri(result.fileCopyUri || result.uri);
+                await AsyncStorage.setItem('userAvatar', result.fileCopyUri || result.uri);
+              } catch (err) {
+                if (!DocumentPicker.isCancel(err)) console.error('Avatar error:', err);
               }
             };
 
@@ -393,11 +500,11 @@ jobs:
             ];
 
             const currentLyricIndex = lyrics.reduce((idx, line, i) => 
-              position >= line.time ? i : idx, -1);
+              progress.position >= line.time ? i : idx, -1);
 
             return (
               <View style={styles.container}>
-                <StatusBar style="light" />
+                <StatusBar barStyle="light-content" backgroundColor="#0a0a0f" />
                 <View style={styles.header}>
                   <View style={styles.formatBadge}><Text style={styles.formatText}>FLAC</Text></View>
                   <Text style={styles.sampleRate}>{currentTrack ? '48.0 kHz / 24 bit' : '-- kHz / -- bit'}</Text>
@@ -444,17 +551,17 @@ jobs:
                   <View style={styles.progressSection}>
                     <TouchableOpacity style={styles.progressBarWrapper} onPress={(e) => {
                       const { locationX } = e.nativeEvent;
-                      seekTo((locationX / (width - 56)) * duration);
+                      seekTo((locationX / (width - 56)) * progress.duration);
                     }}>
                       <View style={styles.progressBarBg}>
-                        <View style={[styles.progressBarFill, { width: `${duration > 0 ? (position / duration) * 100 : 0}%` }]} />
+                        <View style={[styles.progressBarFill, { width: `${progress.duration > 0 ? (progress.position / progress.duration) * 100 : 0}%` }]} />
                       </View>
                     </TouchableOpacity>
                   </View>
 
                   <View style={styles.timeDisplay}>
-                    <Text style={styles.timeText}>{formatTime(position)}</Text>
-                    <Text style={styles.timeText}>{formatTime(duration)}</Text>
+                    <Text style={styles.timeText}>{formatTime(progress.position)}</Text>
+                    <Text style={styles.timeText}>{formatTime(progress.duration)}</Text>
                   </View>
 
                   <View style={styles.controls}>
@@ -513,10 +620,6 @@ jobs:
                             <Text style={styles.timeBtnText}>设置5分钟</Text>
                           </TouchableOpacity>
                         </View>
-                        <TouchableOpacity style={styles.settingRow} onPress={scanMediaLibrary}>
-                          <Text style={styles.settingLabel}>📁 扫描媒体库</Text>
-                          <Text style={styles.settingArrow}>›</Text>
-                        </TouchableOpacity>
                         <TouchableOpacity style={styles.settingRow} onPress={pickAvatar}>
                           <Text style={styles.settingLabel}>👤 更换头像</Text>
                           <Text style={styles.settingArrow}>›</Text>
@@ -601,16 +704,16 @@ jobs:
           APPEOF
 
       - name: Install dependencies
-        run: npm install
-
-      - name: Build Android APK with EAS (development mode - no keystore needed)
         run: |
-          npx eas build --platform android --profile development --non-interactive
+          npm install
+          cd android && ./gradlew wrapper --gradle-version 8.3
 
-      - name: Upload build info
+      - name: Build APK
+        run: |
+          cd android && ./gradlew assembleRelease
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: build-info
-          path: |
-            ./
-            !node_modules
+          name: flac-player-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
