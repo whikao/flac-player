@@ -603,9 +603,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build Android APK with EAS
+      - name: Build Android APK with EAS (development mode - no keystore needed)
         run: |
-          npx eas build --platform android --profile preview --non-interactive
+          npx eas build --platform android --profile development --non-interactive
 
       - name: Upload build info
         uses: actions/upload-artifact@v4
