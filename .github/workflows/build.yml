@@ -31,6 +31,7 @@ jobs:
           mkdir -p src/screens src/components src/hooks src/utils assets
           mkdir -p android/app/src/main/res/values
           mkdir -p android/app/src/main/java/com/whikao/flacplayer
+          mkdir -p android/gradle/wrapper
 
           cat > package.json << 'EOF'
           {
@@ -102,6 +103,16 @@ jobs:
           reactNativeArchitectures=arm64-v8a,armeabi-v7a,x86,x86_64
           newArchEnabled=false
           hermesEnabled=true
+          EOF
+
+          cat > android/gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.3-bin.zip
+          networkTimeout=10000
+          validateDistributionUrl=true
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
           EOF
 
           cat > android/app/build.gradle << 'EOF'
@@ -705,14 +716,23 @@ jobs:
           });
           APPEOF
 
-      - name: Install dependencies
+      - name: Install dependencies and setup gradle
         run: |
           npm install
-          cd android && ./gradlew wrapper --gradle-version 8.3
+          # 下载并设置 gradle wrapper
+          cd android
+          curl -L https://services.gradle.org/distributions/gradle-8.3-bin.zip -o gradle.zip
+          unzip -q gradle.zip
+          mv gradle-8.3 gradle-home
+          export GRADLE_HOME=$(pwd)/gradle-home
+          export PATH=$GRADLE_HOME/bin:$PATH
+          gradle wrapper --gradle-version 8.3
+          chmod +x gradlew
 
       - name: Build APK
         run: |
-          cd android && ./gradlew assembleRelease
+          cd android
+          ./gradlew assembleRelease
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
