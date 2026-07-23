@@ -28,7 +28,9 @@ jobs:
 
       - name: Create Project Files
         run: |
-          mkdir -p src/screens src/components src/hooks src/utils assets android/app/src/main/res/values
+          mkdir -p src/screens src/components src/hooks src/utils assets
+          mkdir -p android/app/src/main/res/values
+          mkdir -p android/app/src/main/java/com/whikao/flacplayer
 
           cat > package.json << 'EOF'
           {
