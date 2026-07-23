@@ -173,7 +173,6 @@ jobs:
             const sleepIntervalRef = useRef(null);
             const scaleAnim = useRef(new Animated.Value(1)).current;
             const vizBars = useRef(Array(20).fill(0).map(() => new Animated.Value(4))).current;
-            const progressInterval = useRef(null);
 
             useEffect(() => {
               loadAvatar();
@@ -598,6 +597,10 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      - name: Init EAS project
+        run: |
+          npx eas init --id flac-player --non-interactive || true
 
       - name: Build Android APK with EAS
         run: |
