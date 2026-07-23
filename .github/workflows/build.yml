@@ -106,7 +106,8 @@ jobs:
           cat > eas.json << 'EOF'
           {
             "cli": {
-              "version": ">= 7.0.0"
+              "version": ">= 7.0.0",
+              "appVersionSource": "remote"
             },
             "build": {
               "development": {
@@ -571,7 +572,7 @@ jobs:
 
       - name: Build Android APK with EAS
         run: |
-          eas build --platform android --profile preview --non-interactive
+          npx eas build --platform android --profile preview --non-interactive
 
       - name: Upload build info
         uses: actions/upload-artifact@v4
