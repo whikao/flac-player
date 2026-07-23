@@ -598,9 +598,35 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Init EAS project
+      - name: Configure EAS project
         run: |
-          npx eas init --id flac-player --non-interactive || true
+          # 使用 Expo API 创建项目并获取 projectId
+          PROJECT_RESPONSE=$(curl -s -X POST             -H "Authorization: Bearer ${{ secrets.EXPO_TOKEN }}"             -H "Content-Type: application/json"             -d '{"name": "FLAC Player", "slug": "flac-player", "owner": "whikao"}'             https://api.expo.dev/v2/projects)
+          echo "Project response: $PROJECT_RESPONSE"
+
+          # 提取 projectId
+          PROJECT_ID=$(echo "$PROJECT_RESPONSE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+          echo "Project ID: $PROJECT_ID"
+
+          # 如果项目已存在，尝试获取现有项目ID
+          if [ -z "$PROJECT_ID" ]; then
+            EXISTING=$(curl -s -H "Authorization: Bearer ${{ secrets.EXPO_TOKEN }}"               https://api.expo.dev/v2/projects | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+            PROJECT_ID="$EXISTING"
+            echo "Existing Project ID: $PROJECT_ID"
+          fi
+
+          # 写入 app.json
+          if [ -n "$PROJECT_ID" ]; then
+            node -e "
+              const fs = require('fs');
+              const appJson = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+              appJson.expo.extra = appJson.expo.extra || {};
+              appJson.expo.extra.eas = appJson.expo.extra.eas || {};
+              appJson.expo.extra.eas.projectId = '$PROJECT_ID';
+              fs.writeFileSync('app.json', JSON.stringify(appJson, null, 2));
+              console.log('Updated app.json with projectId: $PROJECT_ID');
+            "
+          fi
 
       - name: Build Android APK with EAS
         run: |
